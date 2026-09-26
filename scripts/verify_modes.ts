@@ -1,5 +1,6 @@
 import { generateIdentity, generateIdentityFromAddress } from '../src/services/identityGenerator';
 import { getRandomAddress, ADDRESS_MAP } from '../src/data/addresses';
+import { OSM_APARTMENTS } from '../src/data/addresses';
 import { STREET_DERIVATION_RULES, deriveStreetAddress, getDerivationRule, matchesState } from '../src/data/addresses/schemes/derivationRules';
 import { RESIDENTIAL_ADDRESSES, getResidentialAddress } from '../src/data/addresses/schemes/residentialAddresses';
 import { formatFullIdentityText, buildCSVContent } from '../src/services/exportService';
@@ -27,11 +28,20 @@ console.log('================================================================');
 // -----------------------------------------------------------------------------
 console.log('\n--- 1. Testing Mode 1: Scheme C (Residential Condominiums & Apartments) ---');
 const landmarkUS = generateIdentity('US', { gender: 'random', ageRange: 'random', addressMode: 'landmark' });
+if (OSM_APARTMENTS.length > 0) {
+  const osmIdentity = generateIdentityFromAddress(OSM_APARTMENTS[0]);
+  assert(!osmIdentity.address.addressLine2, 'IP-resolved OSM building does not invent an apartment unit');
+  assert(osmIdentity.address.source === 'OpenStreetMap', 'OSM source survives identity generation');
+}
 assert(landmarkUS.address.addressMode === 'landmark', 'Landmark (Scheme C) address mode is set');
 assert(landmarkUS.address.buildingType === 'residential', 'Landmark (Scheme C) building type is strictly residential');
 assert(!!landmarkUS.address.street, 'Landmark address has street');
 assert(!!landmarkUS.address.lat && !!landmarkUS.address.lng, 'Landmark address has lat/lng');
-assert(landmarkUS.address.derivationMeta?.avsTier === 'Residential Condominium / Apartment', 'Landmark AVS tier is Residential Condominium / Apartment');
+assert(landmarkUS.address.derivationMeta?.avsTier === (landmarkUS.address.source === 'OpenStreetMap'
+  ? 'Residential Building (AVS unverified)' : 'Residential Condominium / Apartment'), 'Landmark AVS tier matches its source');
+if (landmarkUS.address.source === 'OpenStreetMap') {
+  assert(!landmarkUS.address.addressLine2, 'OSM building address has no invented apartment unit');
+}
 
 // -----------------------------------------------------------------------------
 // 2. Mode 2: Scheme A (Street Derivation) Verification
@@ -239,9 +249,14 @@ assert(!!krDerived.address.street, 'KR produces valid street address');
 assert(!!krDerived.address.city, 'KR has valid city');
 assert(krDerived.address.addressMode === 'derivation', 'KR addressMode is derivation');
 
-// Rare state filter in Scheme A that doesn't have custom corridor
-const wyDerived = generateIdentity('US', { gender: 'random', ageRange: 'random', state: 'WY', addressMode: 'derivation' });
-assert(!!wyDerived.address.street, 'WY fallback produces valid address without throwing');
+// An explicitly requested state without data must not be replaced by another state.
+let wyRejected = false;
+try {
+  generateIdentity('US', { gender: 'random', ageRange: 'random', state: 'WY', addressMode: 'derivation' });
+} catch (error) {
+  wyRejected = error instanceof Error && error.message.startsWith('No matching address');
+}
+assert(wyRejected, 'WY derivation rejects a cross-state fallback');
 
 // -----------------------------------------------------------------------------
 // 8. Batch Generation Simulation Verification
@@ -273,11 +288,11 @@ for (let i = 0; i < batchCount; i++) {
 console.log('\n--- 9. Testing Export Text & CSV contains mode info & formatting ---');
 const zhText = formatFullIdentityText(landmarkUS, 'zh');
 assert(zhText.includes('地址方案模式：'), 'Chinese text export includes address mode');
-assert(zhText.includes('AVS 风控评级：'), 'Chinese text export includes AVS tier');
+assert(zhText.includes('地址核验状态：') && /AVS 未(?:核验|验证)/.test(zhText), 'Chinese text export labels address verification accurately');
 
 const enText = formatFullIdentityText(landmarkUS, 'en');
 assert(enText.includes('Address Scheme Mode:'), 'English text export includes address mode');
-assert(enText.includes('AVS Verification Tier:'), 'English text export includes AVS tier');
+assert(enText.includes('Address Verification:') && /AVS unverified/i.test(enText), 'English text export labels address verification accurately');
 
 // Verify Residential single family export does not contain dirty line 2
 const sampleRes = generateIdentity('US', { state: 'DE', addressMode: 'residential' });
@@ -289,11 +304,11 @@ const mixedIdentities = [landmarkUS, ilBatch[0], qcBatch[0], sampleRes];
 const csvOutput = buildCSVContent(mixedIdentities);
 assert(csvOutput.startsWith('\uFEFF'), 'CSV output starts with UTF-8 BOM');
 assert(csvOutput.includes('"Address Mode"'), 'CSV header includes Address Mode');
-assert(csvOutput.includes('"AVS / Building Tier"'), 'CSV header includes AVS / Building Tier');
-assert(csvOutput.includes('Scheme C') || csvOutput.includes('Curated Real Landmark Seeds') || csvOutput.includes('Curated Landmark Seed'), 'CSV row includes Scheme C / Landmark mode label');
-assert(csvOutput.includes('Residential Street') || csvOutput.includes('Scheme A: Street Range Derivation') || csvOutput.includes('Scheme A: Street Derivation'), 'CSV row includes Derivation mode label');
-assert(csvOutput.includes('Scheme B: Real Residential Address'), 'CSV row includes Residential mode label');
-assert(csvOutput.includes('Residential Single Family') || csvOutput.includes('Residential Condominium'), 'CSV row includes Residential AVS Tier');
+assert(csvOutput.includes('"Address Verification"'), 'CSV header includes address verification');
+assert(csvOutput.includes('Scheme C: Apartment Sample') || csvOutput.includes('OSM-sourced building'), 'CSV row labels apartment sample source');
+assert(csvOutput.includes('Scheme A: Interpolated Number'), 'CSV row labels derivation as interpolation');
+assert(csvOutput.includes('Scheme B: Residential Sample'), 'CSV row labels residential samples');
+assert(csvOutput.includes('Residential Sample (delivery and AVS unverified)'), 'CSV row labels unverified delivery and AVS');
 
 // -----------------------------------------------------------------------------
 // 10. Normal Setback Algorithm Off-Road Verification (True Metric Projection)
@@ -447,16 +462,66 @@ for (const cc of allSupportedCountries) {
     assert(resAddr.buildingType === 'residential', `getRandomAddress(${cc}, residential) buildingType is strictly residential`);
     assert(resAddr.addressMode === 'residential', `getRandomAddress(${cc}, residential) addressMode is residential`);
   }
-  // Test with invalid state to ensure fallback strictly preserves residential
-  const fallbackRes = getRandomAddress(cc, 'BOGUS_STATE_CODE_XYZ', false, 'residential');
-  assert(fallbackRes.buildingType === 'residential', `getRandomAddress(${cc}, bogus state, residential) fallback strictly preserves residential (never commercial)`);
-
-  // Test derivation mode with invalid state to ensure fallback never returns commercial landmarks
-  const derivFallback = getRandomAddress(cc, 'BOGUS_STATE_CODE_XYZ', false, 'derivation');
-  assert(derivFallback.buildingType !== 'commercial', `getRandomAddress(${cc}, bogus state, derivation) never falls back to commercial landmark`);
+  for (const mode of ['landmark', 'derivation', 'residential'] as AddressMode[]) {
+    let rejected = false;
+    try {
+      getRandomAddress(cc, 'BOGUS_STATE_CODE_XYZ', false, mode);
+    } catch (error) {
+      rejected = error instanceof Error && error.message.startsWith('No matching address');
+    }
+    assert(rejected, `getRandomAddress(${cc}, bogus state, ${mode}) rejects a cross-region fallback`);
+  }
 }
 
+for (const [country, state, mode] of [
+  ['JP', '01', 'landmark'], ['CH', 'BE', 'landmark'], ['US', 'WY', 'residential']
+] as [CountryCode, string, AddressMode][]) {
+  let rejected = false;
+  try {
+    getRandomAddress(country, state, false, mode);
+  } catch (error) {
+    rejected = error instanceof Error && error.message.startsWith('No matching address');
+  }
+  assert(rejected, `${mode} in ${country}/${state} does not silently generate in another region`);
+}
+assert(getRandomAddress('JP', '01', false, 'residential').state === '01', 'existing Hokkaido residential sample remains selectable');
+assert(getRandomAddress('US', 'DE', false, 'derivation').state === 'DE', 'existing Delaware interpolation remains selectable');
+
 // 13.5 IP Resolution Reality & Residential Livability Guarantee
+const santaClaraConsensus: IpConsensusResult = {
+  targetIp: '203.0.113.1',
+  winnerCountry: 'United States',
+  winnerCountryCode: 'US',
+  winnerCity: 'Santa Clara',
+  winnerRegion: 'CA',
+  confidenceRate: 100,
+  topCityVoteCount: 4,
+  successQueries: 4,
+  details: []
+};
+const santaClaraAddress = resolveAddressFromIp(santaClaraConsensus);
+assert(santaClaraConsensus.matchedStrategy === 'exact_city_derivation', 'Santa Clara IP selects a street corridor');
+assert(santaClaraAddress.addressMode === 'derivation' && santaClaraAddress.derivationMeta?.mode === 'derivation', 'IP street corridor keeps interpolation mode');
+assert(santaClaraConsensus.strategySummaryEn?.includes('unverified') === true, 'IP street interpolation does not claim verified delivery');
+const santaClaraIdentity = generateIdentityFromAddress(santaClaraAddress);
+assert(buildCSVContent([santaClaraIdentity]).includes('Scheme A: Interpolated Number'), 'CSV identifies IP-derived street numbers as interpolated');
+assert(formatFullIdentityText(santaClaraIdentity, 'zh').includes('地址方案模式：方案A·插值门牌'), 'text export identifies IP-derived street numbers as interpolated');
+const baselConsensus: IpConsensusResult = {
+  ...santaClaraConsensus,
+  winnerCountry: 'Switzerland',
+  winnerCountryCode: 'CH',
+  winnerCity: 'Unknown City',
+  winnerRegion: 'BS'
+};
+const baselAddress = resolveAddressFromIp(baselConsensus);
+assert(baselConsensus.matchedStrategy === 'state_derivation_fallback', 'Basel IP selects a state street corridor');
+assert(baselAddress.addressMode === 'derivation' && baselAddress.derivationMeta?.mode === 'derivation', 'IP state corridor keeps interpolation mode');
+assert(buildCSVContent([generateIdentityFromAddress(baselAddress)]).includes('Scheme A: Interpolated Number'), 'CSV identifies IP state corridors as interpolated');
+const citySampleConsensus: IpConsensusResult = { ...santaClaraConsensus, winnerCity: 'Dallas', winnerRegion: 'TX' };
+const citySampleAddress = resolveAddressFromIp(citySampleConsensus);
+assert(citySampleConsensus.matchedStrategy === 'exact_city_residential', 'Dallas IP selects a same-city residential sample');
+assert(citySampleAddress.derivationMeta?.avsTier?.includes('unverified') === true && citySampleConsensus.strategySummaryEn?.includes('unverified') === true, 'IP residential sample does not claim AVS verification');
+
 const sampleIpConsensuses: IpConsensusResult[] = [
   {
     targetIp: '202.64.12.1',
@@ -600,7 +665,7 @@ for (const [countryKey, list] of Object.entries(ADDRESS_MAP)) {
     }
   }
 }
-console.log(`   Audited all ${totalSeedAddresses} seed addresses in ADDRESS_MAP across 21 countries: 100% verified residential condos/apartments!`);
+console.log(`   Audited all ${totalSeedAddresses} bundled address records across 21 countries for residential classification; only OSM records have object links.`);
 
 // 14.2 High-volume multi-mode stress test: 150 random identities across all modes & countries
 const modesToTest: AddressMode[] = ['landmark', 'derivation', 'residential'];

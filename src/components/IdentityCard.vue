@@ -167,7 +167,7 @@
               <MapPin class="w-4 h-4" />
             </div>
             <h3 class="text-base font-bold text-slate-900 dark:text-white">
-              {{ labels.addressTitle }}
+              {{ identity.address.source === 'OpenStreetMap' ? t('card.addressTitle') : t('card.sampleAddressTitle') }}
             </h3>
             <span
               v-if="identity.address.isTaxFree"
@@ -175,6 +175,10 @@
             >
               {{ labels.taxFreeTag }}
             </span>
+            <a v-if="identity.address.sourceId" :href="`https://www.openstreetmap.org/${identity.address.sourceId}`"
+              target="_blank" rel="noopener noreferrer" class="text-xs text-primary-600 dark:text-primary-400 underline">
+              {{ t('addressMode.viewSource') }}
+            </a>
           </div>
           <button
             type="button"
@@ -286,7 +290,7 @@
           <div class="space-y-1">
             <div class="flex items-center gap-1.5 text-xs font-bold text-amber-800 dark:text-amber-300">
               <PackageCheck class="w-4 h-4" />
-              <span>{{ identity.address.addressMode === 'residential' ? labels.residentialTitle : labels.forwarderTitle }}</span>
+              <span>{{ t('card.forwarderTitle') }}</span>
             </div>
             <div class="text-xs font-mono text-slate-600 dark:text-slate-400 line-clamp-1">
               {{ displayFullName }} · {{ identity.address.addressLine1 || identity.address.street }}{{ identity.address.addressLine2 ? ` · ${identity.address.addressLine2}` : '' }} · {{ identity.address.city }}, {{ identity.address.state }} {{ identity.address.postcode }}
@@ -299,7 +303,7 @@
           >
             <Check v-if="copiedKey === 'forwarder'" class="w-3.5 h-3.5" />
             <Copy v-else class="w-3.5 h-3.5" />
-            <span>{{ copiedKey === 'forwarder' ? t('card.copiedField') : labels.copyForwarder }}</span>
+            <span>{{ copiedKey === 'forwarder' ? t('card.copiedField') : t('card.copyForwarder') }}</span>
           </button>
         </div>
 
@@ -734,6 +738,8 @@ const modeIcon = computed(() => {
 
 const modeBadgeText = computed(() => {
   const mode = props.identity.address.addressMode;
+  if (props.identity.address.source === 'OpenStreetMap') return t('addressMode.sourcedShort');
+  if (mode === 'sourced') return t('addressMode.sourcedShort');
   if (mode === 'derivation') return t('addressMode.derivationBadge');
   if (mode === 'residential') return t('addressMode.residentialBadge');
   return t('addressMode.landmarkBadge');
@@ -764,29 +770,39 @@ const displayTaxRate = computed(() => {
 const localizedAvsTier = computed(() => {
   const mode = props.identity.address.addressMode;
   const rawTier = props.identity.address.derivationMeta?.avsTier;
+  if (props.identity.address.source === 'OpenStreetMap') {
+    const building = props.identity.address.sourceBuildingType;
+    if (building === 'apartments') return locale.value === 'zh' ? '公寓建筑 · AVS 未核验' : 'Apartment Building · AVS Unverified';
+    if (['house', 'detached', 'semidetached_house', 'terrace'].includes(building || '')) {
+      return locale.value === 'zh' ? '独栋/联排住宅 · AVS 未核验' : 'House / Townhouse · AVS Unverified';
+    }
+    return locale.value === 'zh' ? '住宅建筑 · AVS 未核验' : 'Residential Building · AVS Unverified';
+  }
   if (locale.value === 'zh') {
-    if (rawTier === 'Residential AVS Pass' || mode === 'residential') return '住宅 AVS 认证 (独栋洋房)';
-    if (rawTier === 'Residential Condominium / Apartment' || mode === 'landmark') return '真实都会名苑 · 优质公寓';
-    if (rawTier === 'Residential Street (GIS Validated)' || rawTier === 'Unique Synthetic AVS' || mode === 'derivation') return '市政合法门牌 · 独一无二';
-    return rawTier || '100% 真实住宅建筑';
+    if (mode === 'residential') return '住宅样本 · AVS 未核验';
+    if (rawTier === 'Residential Condominium / Apartment' || mode === 'landmark') return '内置公寓样本 · 未核验';
+    if (rawTier === 'Residential Street (GIS Validated)' || rawTier === 'Unique Synthetic AVS' || mode === 'derivation') return '插值门牌 · 未逐条核验';
+    return '地址样本 · 未核验';
   } else {
-    if (rawTier === 'Residential AVS Pass' || mode === 'residential') return 'Residential AVS Pass';
-    if (rawTier === 'Residential Condominium / Apartment' || mode === 'landmark') return 'Residential Condominium / Apartment';
-    if (rawTier === 'Residential Street (GIS Validated)' || rawTier === 'Unique Synthetic AVS' || mode === 'derivation') return 'Residential Street (GIS Validated)';
-    return rawTier || '100% Real Residential';
+    if (mode === 'residential') return 'Residential Sample · AVS Unverified';
+    if (rawTier === 'Residential Condominium / Apartment' || mode === 'landmark') return 'Apartment Sample · Unverified';
+    if (rawTier === 'Residential Street (GIS Validated)' || rawTier === 'Unique Synthetic AVS' || mode === 'derivation') return 'Interpolated Number · Unverified';
+    return 'Address Sample · Unverified';
   }
 });
 
 const localizedRuleSummary = computed(() => {
-  const meta = props.identity.address.derivationMeta;
   const mode = props.identity.address.addressMode;
+  if (props.identity.address.source === 'OpenStreetMap') {
+    return locale.value === 'zh'
+      ? '© OpenStreetMap contributors (ODbL) · 建筑门牌，无房号或投递认证'
+      : '© OpenStreetMap contributors (ODbL) · Building address, no verified unit or delivery';
+  }
   if (locale.value === 'zh') {
-    return meta?.ruleSummary || (mode === 'residential' ? '真实居民独栋/住宅 · 纯天然居民房' : (mode === 'derivation' ? '真实居住街区门牌衍生 · GIS插值' : '真实都会高层公寓/优质名苑社区 · 100% 物理真实居住'));
+    return mode === 'derivation' ? '街道门牌插值 · 未逐条核验' : '内置地址样本 · 投递与 AVS 未核验';
   } else {
-    if (meta?.ruleSummaryEn) return meta.ruleSummaryEn;
-    if (mode === 'residential') return 'Single Family Home / Residence · Authentic Residential';
-    if (mode === 'derivation') return 'Valid Residential Street · Linear GIS Interpolation';
-    return 'Metropolitan Residential Condominium · 100% Real Living';
+    if (mode === 'derivation') return 'Interpolated street number · not individually verified';
+    return 'Bundled address sample · delivery and AVS unverified';
   }
 });
 

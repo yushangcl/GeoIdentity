@@ -31,7 +31,7 @@
             <span class="text-xs font-medium text-slate-600 dark:text-slate-300">
               {{ t('batch.countLabel') }}:
             </span>
-            <div class="flex items-center gap-1 bg-slate-100 dark:bg-slate-800 p-1 rounded-xl">
+            <div class="flex flex-wrap items-center gap-1 bg-slate-100 dark:bg-slate-800 p-1 rounded-xl">
               <button
                 v-for="count in [5, 10, 20, 50]"
                 :key="count"
@@ -91,6 +91,11 @@
               >
                 <span>🏡 {{ t('addressMode.residentialShort') }}</span>
               </button>
+              <button type="button" @click="selectedMode = 'sourced'"
+                class="px-2.5 py-1 text-xs font-semibold rounded-lg transition-all cursor-pointer"
+                :class="selectedMode === 'sourced' ? 'bg-amber-500 text-white' : 'text-slate-600 dark:text-slate-400'">
+                {{ t('addressMode.sourcedShort') }}
+              </button>
             </div>
           </div>
 
@@ -131,12 +136,13 @@
 
       <!-- Preview Table -->
       <div class="flex-1 overflow-y-auto p-6">
+        <p v-if="batchError" role="alert" class="mb-3 text-sm text-amber-700 dark:text-amber-300">{{ batchError }}</p>
         <div class="text-xs text-slate-500 mb-3 flex items-center justify-between">
           <span>{{ t('batch.totalGenerated', { count: batchList.length }) }}</span>
           <span class="text-[11px] text-slate-400">
             {{ t('batch.currentModeLabel') }}:
             <span class="font-semibold text-slate-700 dark:text-slate-300">
-              {{ selectedMode === 'residential' ? t('addressMode.residentialShort') : selectedMode === 'derivation' ? t('addressMode.derivationShort') : t('addressMode.landmarkShort') }}
+              {{ selectedMode === 'sourced' ? t('addressMode.sourcedShort') : selectedMode === 'residential' ? t('addressMode.residentialShort') : selectedMode === 'derivation' ? t('addressMode.derivationShort') : t('addressMode.landmarkShort') }}
             </span>
           </span>
         </div>
@@ -172,7 +178,7 @@
                             : 'bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300'
                       ]"
                     >
-                      {{ item.address.addressMode === 'residential' ? (locale === 'zh' ? '方案B·住宅' : 'Scheme B: Res.') : item.address.addressMode === 'derivation' ? (locale === 'zh' ? '方案A·衍生' : 'Scheme A: Deriv.') : (locale === 'zh' ? '地标种子' : 'Landmark') }}
+                      {{ item.address.addressMode === 'sourced' ? t('addressMode.sourcedShort') : item.address.addressMode === 'residential' ? t('addressMode.residentialShort') : item.address.addressMode === 'derivation' ? t('addressMode.derivationShort') : t('addressMode.landmarkShort') }}
                     </span>
                   </td>
                   <td class="p-3 font-medium text-slate-900 dark:text-white whitespace-nowrap">
@@ -271,16 +277,26 @@ function getBatchTaxRate(addr: any): string {
 const selectedCount = ref(10);
 const selectedMode = ref<AddressMode>(props.filters.addressMode || 'residential');
 const batchList = ref<GeneratedIdentity[]>([]);
+const batchError = ref('');
 
 function generateBatch() {
   const result: GeneratedIdentity[] = [];
   const stateToUse = props.selectedState || props.filters.state || undefined;
-  for (let i = 0; i < selectedCount.value; i++) {
-    result.push(generateIdentity(props.countryCode, {
-      ...props.filters,
-      state: stateToUse,
-      addressMode: selectedMode.value
-    }));
+  try {
+    for (let i = 0; i < selectedCount.value; i++) {
+      result.push(generateIdentity(props.countryCode, {
+        ...props.filters,
+        state: stateToUse,
+        addressMode: selectedMode.value
+      }));
+    }
+    batchError.value = '';
+  } catch (error) {
+    if (!(error instanceof Error)) throw error;
+    if (error.message.startsWith('No sourced address')) batchError.value = t('addressMode.noSourcedAddress');
+    else if (error.message.startsWith('No matching address')) batchError.value = t('addressMode.noMatchingAddress');
+    else throw error;
+    result.length = 0;
   }
   batchList.value = result;
 }
@@ -297,7 +313,7 @@ watch(
   }
 );
 
-watch([selectedCount, selectedMode], () => {
+watch([selectedCount, selectedMode, () => props.countryCode, () => props.selectedState], () => {
   if (props.isOpen) {
     generateBatch();
   }

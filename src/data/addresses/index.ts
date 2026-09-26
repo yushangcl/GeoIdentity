@@ -12,6 +12,23 @@ import { SG_ADDRESSES } from './sg';
 import { EXTENDED_ADDRESSES } from './extended';
 import { getDerivationRule, deriveStreetAddress, matchesState } from './schemes/derivationRules';
 import { getResidentialAddress, RESIDENTIAL_ADDRESSES } from './schemes/residentialAddresses';
+import osmApartments from './osmApartments.json';
+
+type OsmApartment = Pick<RealAddress, 'street' | 'city' | 'state' | 'postcode' | 'lat' | 'lng'> & { id: string; building?: string };
+
+export const OSM_APARTMENTS: RealAddress[] = (osmApartments as OsmApartment[]).map(a => ({
+  ...a,
+  stateFull: a.state === 'DE' ? 'Delaware' : 'Oregon',
+  country: 'United States',
+  countryCode: 'US',
+  isTaxFree: true,
+  taxRate: '0.00% (No Sales Tax)',
+  timezone: a.state === 'DE' ? 'America/New_York (EST/EDT)' : 'America/Los_Angeles (PST/PDT)',
+  timezoneCode: a.state === 'DE' ? 'EST' : 'PST',
+  source: 'OpenStreetMap',
+  sourceId: a.id,
+  sourceBuildingType: a.building || 'apartments'
+}));
 
 function initResidentialSeedList(list: RealAddress[]): RealAddress[] {
   return list.map(addr => ({
@@ -21,7 +38,7 @@ function initResidentialSeedList(list: RealAddress[]): RealAddress[] {
 }
 
 export const ADDRESS_MAP: Record<CountryCode, RealAddress[]> = {
-  US: initResidentialSeedList(US_ADDRESSES),
+  US: initResidentialSeedList([...US_ADDRESSES, ...OSM_APARTMENTS]),
   GB: initResidentialSeedList(GB_ADDRESSES),
   JP: initResidentialSeedList(JP_ADDRESSES),
   CA: initResidentialSeedList(CA_ADDRESSES),
@@ -45,18 +62,45 @@ export const ADDRESS_MAP: Record<CountryCode, RealAddress[]> = {
 };
 
 function enrichLandmarkAddress(raw: RealAddress): RealAddress {
+  const fromOsm = raw.source === 'OpenStreetMap';
   return {
     ...raw,
     addressMode: 'landmark',
     buildingType: 'residential',
     derivationMeta: {
       mode: 'landmark',
-      modeLabelZh: '方案C·真实都会公寓 (100% 真实住宅)',
-      modeLabelEn: 'Scheme C (Residential Condos)',
-      ruleSummary: '真实都会高层公寓/优质名苑社区 · 100% 物理真实居住',
+      modeLabelZh: fromOsm ? '方案C·OSM 住宅建筑门牌' : '方案C·都会公寓',
+      modeLabelEn: fromOsm ? 'Scheme C (OSM Residential Building)' : 'Scheme C (Residential Condos)',
+      ruleSummary: fromOsm ? 'OpenStreetMap 公开住宅建筑门牌，未验证住户或 AVS' : '已有公寓地址样本，未验证住户或 AVS',
+      ruleSummaryEn: fromOsm ? 'Public OSM residential building address; no unit, delivery or AVS verification' : undefined,
       interpolated: false,
       buildingType: 'residential',
-      avsTier: 'Residential Condominium / Apartment'
+      avsTier: fromOsm ? 'Residential Building (AVS unverified)' : 'Residential Condominium / Apartment'
+    }
+  };
+}
+
+export function getSourcedAddress(countryCode: CountryCode, stateCode?: string, city?: string): RealAddress {
+  const candidates = OSM_APARTMENTS.filter(a => a.countryCode === countryCode &&
+    (!stateCode || matchesState(a.state, a.stateFull, stateCode)) &&
+    (!city || a.city.toLowerCase() === city.trim().toLowerCase()));
+  if (candidates.length === 0) {
+    throw new Error(`No sourced address for ${countryCode}${stateCode ? `/${stateCode}` : ''}${city ? `/${city}` : ''}`);
+  }
+  const raw = candidates[Math.floor(Math.random() * candidates.length)];
+  return {
+    ...raw,
+    addressMode: 'sourced',
+    buildingType: 'residential',
+    derivationMeta: {
+      mode: 'sourced',
+      modeLabelZh: 'OpenStreetMap 可核对建筑门牌',
+      modeLabelEn: 'OpenStreetMap Sourced Building Address',
+      ruleSummary: '公开建筑门牌，房号、收件与 AVS 未核验',
+      ruleSummaryEn: 'Public building address; unit, delivery and AVS unverified',
+      interpolated: false,
+      buildingType: 'residential',
+      avsTier: 'Residential Building (AVS unverified)'
     }
   };
 }
@@ -67,6 +111,11 @@ export function getRandomAddress(
   isTaxFreeOnly?: boolean,
   mode: AddressMode = 'residential'
 ): RealAddress {
+  if (mode === 'sourced') {
+    const address = getSourcedAddress(countryCode, stateCode);
+    if (isTaxFreeOnly && !address.isTaxFree) throw new Error(`No sourced address for ${countryCode} in a tax-free region`);
+    return address;
+  }
   const countryLandmarkList = (ADDRESS_MAP[countryCode] && ADDRESS_MAP[countryCode].length > 0)
     ? ADDRESS_MAP[countryCode]
     : ADDRESS_MAP.US;
@@ -84,6 +133,7 @@ export function getRandomAddress(
       if (stateRes) {
         return stateRes;
       }
+      throw new Error(`No matching address for ${countryCode}/${stateCode} in ${mode} mode`);
     }
     // If stateCode was not specified or no state match exists, try a country-level derivation corridor
     const countryFallbackRule = getDerivationRule(countryCode, undefined, isTaxFreeOnly);
@@ -104,6 +154,7 @@ export function getRandomAddress(
     if (resAddr) {
       return resAddr;
     }
+    if (stateCode) throw new Error(`No matching address for ${countryCode}/${stateCode} in ${mode} mode`);
     // Fallback within country: strictly prioritize other residential addresses in that country
     const countryFallbackRes = getResidentialAddress(countryCode, undefined, isTaxFreeOnly)
       || (isTaxFreeOnly ? getResidentialAddress(countryCode, undefined, false) : null);
@@ -121,15 +172,16 @@ export function getRandomAddress(
 
   if (stateCode) {
     const filtered = countryLandmarkList.filter(a => matchesState(a.state, a.stateFull, stateCode));
-    if (filtered.length > 0) {
-      candidates = filtered;
-    }
+    if (filtered.length === 0) throw new Error(`No matching address for ${countryCode}/${stateCode} in ${mode} mode`);
+    candidates = filtered;
   }
 
   if (isTaxFreeOnly) {
     const taxFreeList = candidates.filter(a => a.isTaxFree);
     if (taxFreeList.length > 0) {
       candidates = taxFreeList;
+    } else if (stateCode) {
+      throw new Error(`No matching address for ${countryCode}/${stateCode} in ${mode} mode`);
     }
   }
 

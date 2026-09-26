@@ -67,11 +67,12 @@
             @update:filters="filters = $event"
             @generate="handleGenerate"
           />
+          <p v-if="addressError" role="alert" class="text-sm text-amber-700 dark:text-amber-300">{{ addressError }}</p>
         </div>
 
         <!-- Tab 2: IP Address Based Generator -->
         <div v-show="activeGeneratorTab === 'ip'">
-          <IpAddressCard @identity-generated="handleIpIdentityGenerated" />
+          <IpAddressCard @identity-generated="handleIpIdentityGenerated" @no-address="handleIpNoAddress" />
         </div>
 
         <!-- Current Identity Card Display -->
@@ -267,7 +268,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue';
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue';
 import type { CountryCode, GeneratedIdentity, FilterOptions, AddressMode } from './types/identity';
 import { COUNTRIES } from './data/countries';
 import { generateIdentity } from './services/identityGenerator';
@@ -310,11 +311,11 @@ const activeGeneratorTab = ref<'standard' | 'ip'>('standard');
 const selectedCountryCode = ref<CountryCode>('US');
 const selectedState = ref<string>('');
 
-const savedMode = (localStorage.getItem('geo_address_mode') as AddressMode) || 'residential';
+const savedMode = localStorage.getItem('geo_address_mode') as AddressMode | null;
 const filters = ref<FilterOptions>({
   gender: 'random',
   ageRange: 'random',
-  addressMode: savedMode
+  addressMode: savedMode && ['sourced', 'landmark', 'derivation', 'residential'].includes(savedMode) ? savedMode : 'residential'
 });
 
 const currentIdentity = ref<GeneratedIdentity | null>(null);
@@ -326,6 +327,7 @@ const isHistoryDrawerOpen = ref(false);
 const isDisclaimerModalOpen = ref(false);
 const disclaimerActiveTab = ref('all');
 const isGenerating = ref(false);
+const addressError = ref('');
 const toastRef = ref<InstanceType<typeof Toast> | null>(null);
 
 const currentCountryName = computed(() => {
@@ -378,12 +380,16 @@ function handleHashChange() {
 
 function handleGenerate() {
   isGenerating.value = true;
+  currentIdentity.value = null;
+  addressError.value = '';
   if (filters.value.addressMode) {
     try {
       localStorage.setItem('geo_address_mode', filters.value.addressMode);
-    } catch (_e) {}
+    } catch (error) {
+      console.warn('Could not save address mode preference', error);
+    }
   }
-  setTimeout(() => {
+  try {
     const newId = generateIdentity(selectedCountryCode.value, {
       ...filters.value,
       state: selectedState.value || undefined
@@ -391,8 +397,14 @@ function handleGenerate() {
     currentIdentity.value = newId;
     saveToHistory(newId);
     historyList.value = getHistory();
+  } catch (error) {
+    if (!(error instanceof Error)) throw error;
+    if (error.message.startsWith('No sourced address')) addressError.value = t('addressMode.noSourcedAddress');
+    else if (error.message.startsWith('No matching address')) addressError.value = t('addressMode.noMatchingAddress');
+    else throw error;
+  } finally {
     isGenerating.value = false;
-  }, 120);
+  }
 }
 
 function handleCountryChange(code: CountryCode) {
@@ -409,15 +421,26 @@ function handleStateChange(state: string) {
 }
 
 function handleIpIdentityGenerated(identity: GeneratedIdentity) {
+  if (activeGeneratorTab.value !== 'ip') return;
   currentIdentity.value = identity;
   selectedCountryCode.value = identity.countryCode;
   selectedState.value = identity.address.state;
   saveToHistory(identity);
   historyList.value = getHistory();
   if (toastRef.value) {
-    toastRef.value.show(locale.value === 'zh' ? '已成功基于 IP 多数仲裁生成同城真实档案！' : 'Generated same-city identity from IP consensus!');
+    toastRef.value.show(locale.value === 'zh' ? '已匹配地址样本（投递与 AVS 未核验）' : 'Matched an address sample (delivery and AVS unverified)');
   }
 }
+
+function handleIpNoAddress() {
+  if (activeGeneratorTab.value === 'ip') currentIdentity.value = null;
+}
+
+watch(activeGeneratorTab, tab => {
+  currentIdentity.value = null;
+  addressError.value = '';
+  if (tab === 'standard') handleGenerate();
+});
 
 function handleJumpToCountry(code: CountryCode) {
   selectedCountryCode.value = code;
@@ -472,9 +495,10 @@ onMounted(() => {
   handleHashChange();
 
   // Load first identity
-  if (historyList.value.length > 0) {
+  if (historyList.value.length > 0 && historyList.value[0].address.addressMode === filters.value.addressMode) {
     currentIdentity.value = historyList.value[0];
     selectedCountryCode.value = currentIdentity.value.countryCode;
+    selectedState.value = currentIdentity.value.address.state;
   } else {
     handleGenerate();
   }

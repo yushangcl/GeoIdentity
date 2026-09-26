@@ -18,7 +18,7 @@ export interface CountryInfo {
   popularStates: { code: string; nameZh: string; nameEn: string; isTaxFree?: boolean }[];
 }
 
-export type AddressMode = 'landmark' | 'derivation' | 'residential';
+export type AddressMode = 'sourced' | 'landmark' | 'derivation' | 'residential';
 
 export interface AddressDerivationMeta {
   mode: AddressMode;
@@ -56,6 +56,9 @@ export interface StreetDerivationRule {
 
 export interface RealAddress {
   street: string;
+  source?: 'OpenStreetMap';
+  sourceId?: string;
+  sourceBuildingType?: string;
   addressLine1?: string;
   addressLine2?: string;
   city: string;

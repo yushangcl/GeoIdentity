@@ -20,6 +20,7 @@
     </div>
 
     <!-- IP Input & Action Bar -->
+    <p v-if="addressError" role="alert" class="text-xs text-amber-700 dark:text-amber-300">{{ addressError }}</p>
     <div class="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5">
       <div class="relative flex-1">
         <div class="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
@@ -193,6 +194,7 @@ import { useI18n } from '../i18n';
 
 const emit = defineEmits<{
   (e: 'identity-generated', identity: GeneratedIdentity, consensus: IpConsensusResult): void;
+  (e: 'no-address'): void;
 }>();
 
 const { locale, t } = useI18n();
@@ -202,6 +204,7 @@ const isDetectingIp = ref(false);
 const isLoading = ref(false);
 const showDetails = ref(false);
 const consensus = ref<IpConsensusResult | null>(null);
+const addressError = ref('');
 
 async function handleFetchClientIp() {
   if (isDetectingIp.value) return;
@@ -219,20 +222,29 @@ async function handleFetchClientIp() {
 async function handleSearch() {
   if (isLoading.value) return;
   isLoading.value = true;
+  addressError.value = '';
+  consensus.value = null;
+  emit('no-address');
   try {
     const res = await queryMultiSourceIp(ipInput.value);
+    if (res.successQueries === 0) {
+      addressError.value = t('ipGen.lookupFailed');
+      return;
+    }
     consensus.value = res;
     if (res.targetIp && !ipInput.value) {
       ipInput.value = res.targetIp;
     }
     
-    // Resolve address matching this consensus
     const resolvedAddress = resolveAddressFromIp(res);
-    
-    // Generate complete identity
-    const identity = generateIdentityFromAddress(resolvedAddress);
-    
-    emit('identity-generated', identity, res);
+    const addressKindZh = resolvedAddress.addressMode === 'derivation' ? '街道插值门牌' : '内置地址样本';
+    const addressKindEn = resolvedAddress.addressMode === 'derivation' ? 'Interpolated street number' : 'Bundled address sample';
+    res.strategySummaryZh = `匹配 ${resolvedAddress.city}, ${resolvedAddress.state} 的${addressKindZh}；可能并非 IP 同城，投递与 AVS 未核验`;
+    res.strategySummaryEn = `${addressKindEn} in ${resolvedAddress.city}, ${resolvedAddress.state}; may differ from IP city. Delivery and AVS unverified.`;
+    emit('identity-generated', generateIdentityFromAddress(resolvedAddress), res);
+  } catch (error) {
+    console.error('IP lookup failed', error);
+    addressError.value = t('ipGen.lookupFailed');
   } finally {
     isLoading.value = false;
   }

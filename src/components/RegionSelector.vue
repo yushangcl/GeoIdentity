@@ -223,11 +223,9 @@ const filteredCountries = computed(() => {
 
 function selectCountry(code: CountryCode) {
   emit('update:selectedCountryCode', code);
-  emit('update:selectedState', '');
 }
 
 function selectTaxFreeState(stateCode: string) {
-  emit('update:selectedCountryCode', 'US');
   emit('update:selectedState', stateCode);
 }
 </script>

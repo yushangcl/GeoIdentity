@@ -25,7 +25,7 @@
     </div>
 
     <!-- 3 Distinct Address Mode Cards -->
-    <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+    <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
       <!-- 1. 高精度真实地标种子库 (Curated Landmark Seeds) -->
       <button
         type="button"
@@ -156,6 +156,12 @@
         >
           {{ t('addressMode.residentialDesc') }}
         </p>
+      </button>
+      <button type="button" @click="updateMode('sourced')"
+        class="text-left p-4 rounded-2xl border transition-all"
+        :class="currentMode === 'sourced' ? 'bg-amber-50 dark:bg-amber-950/40 border-amber-500 text-amber-900 dark:text-amber-100' : 'bg-slate-50/60 dark:bg-slate-800/40 border-slate-200 dark:border-slate-800 text-slate-800 dark:text-slate-200'">
+        <span class="flex items-center gap-2 text-xs font-bold"><MapPin class="w-4 h-4" />{{ t('addressMode.sourcedShort') }}</span>
+        <span class="block text-[11px] leading-relaxed mt-2">{{ t('addressMode.sourcedDesc') }}</span>
       </button>
     </div>
 
@@ -290,6 +296,7 @@
 import { ref, computed } from 'vue';
 import {
   Sparkles,
+  MapPin,
   Zap,
   Building2,
   Route,

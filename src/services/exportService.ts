@@ -346,9 +346,11 @@ Perfil 100% sintético generado por algoritmo para pruebas de software y validac
   // 2. 中文模式 (Chinese Format)
   const isZh = lang === 'zh';
   if (isZh) {
-    const avsTierZh = identity.address.addressMode === 'residential'
-      ? '住宅 AVS 认证 (独栋洋房)'
-      : (identity.address.addressMode === 'derivation' ? '市政合法门牌 · 独一无二' : '都会名苑公寓 · 100% 真实住宅');
+    const avsTierZh = identity.address.source === 'OpenStreetMap'
+      ? 'OSM 住宅建筑门牌 · AVS 未验证 (© OpenStreetMap contributors, ODbL)'
+      : identity.address.addressMode === 'residential'
+      ? '住宅样本 · AVS 未核验'
+      : (identity.address.addressMode === 'derivation' ? '插值门牌 · 未逐条核验' : '内置公寓样本 · AVS 未核验');
 
     const taxRateZh = (identity.address.isTaxFree || (identity.address.taxRate && identity.address.taxRate.includes('No Sales Tax')))
       ? '0.00% (免消费税)'
@@ -366,9 +368,9 @@ Perfil 100% sintético generado por algoritmo para pruebas de software y validac
 血型：${identity.basic.bloodType}
 星座：${identity.basic.zodiacSign}
 
-=== 真实地址信息 (Google Maps 真实可查) ===
-地址方案模式：${identity.address.derivationMeta?.modeLabelZh || (identity.address.addressMode === 'residential' ? '方案B·真实居民住宅/独栋' : identity.address.addressMode === 'derivation' ? '方案A·真实居住街区门牌衍生' : '方案C·真实都会公寓/名苑社区库')}
-AVS 风控评级：${avsTierZh}
+=== 地址数据 (按来源核对) ===
+地址方案模式：${identity.address.source === 'OpenStreetMap' ? 'OSM 来源建筑门牌' : identity.address.addressMode === 'derivation' ? '方案A·插值门牌' : identity.address.addressMode === 'residential' ? '方案B·住宅样本' : '方案C·公寓样本'}
+地址核验状态：${avsTierZh}
 国家/地区：${identity.address.country} (${identity.address.countryCode})
 州/省：${identity.address.stateFull || identity.address.state}
 城市：${identity.address.city}
@@ -411,9 +413,11 @@ ${identity.document.typeNameZh}：${identity.document.docNumber}
   }
 
   // 3. 英文模式 (English Format)
-  const avsTierEn = identity.address.addressMode === 'residential'
-    ? 'Residential AVS Pass'
-    : (identity.address.addressMode === 'derivation' ? 'Residential Street (GIS Validated)' : 'Residential Condominium / Apartment');
+  const avsTierEn = identity.address.source === 'OpenStreetMap'
+    ? 'OSM Residential Building · AVS Unverified (© OpenStreetMap contributors, ODbL)'
+    : identity.address.addressMode === 'residential'
+    ? 'Residential Sample · AVS Unverified'
+    : (identity.address.addressMode === 'derivation' ? 'Interpolated Number (unverified)' : 'Bundled Apartment Sample (AVS unverified)');
 
   const taxRateEn = (identity.address.isTaxFree || (identity.address.taxRate && identity.address.taxRate.includes('免税')))
     ? '0.00% (No Sales Tax)'
@@ -431,9 +435,9 @@ Date of Birth: ${identity.basic.birthDate}
 Blood Type: ${identity.basic.bloodType}
 Zodiac: ${identity.basic.zodiacSign}
 
-=== Authentic Address (Google Maps Verifiable) ===
-Address Scheme Mode: ${identity.address.derivationMeta?.modeLabelEn || (identity.address.addressMode === 'residential' ? 'Scheme B: Real Residential Address' : identity.address.addressMode === 'derivation' ? 'Scheme A: Residential Street Derivation' : 'Scheme C: Real Residential Condos & Apartments')}
-AVS Verification Tier: ${avsTierEn}
+=== Address Data (check source) ===
+Address Scheme Mode: ${identity.address.source === 'OpenStreetMap' ? 'OSM-sourced building' : identity.address.addressMode === 'derivation' ? 'Scheme A: Interpolated Number' : identity.address.addressMode === 'residential' ? 'Scheme B: Residential Sample' : 'Scheme C: Apartment Sample'}
+Address Verification: ${avsTierEn}
 Country: ${localCountryName} (${identity.address.countryCode})
 State/Province: ${identity.address.stateFull || identity.address.state}
 City: ${identity.address.city}
@@ -479,7 +483,7 @@ export function buildCSVContent(identities: GeneratedIdentity[]): string {
   const headers = [
     'Country',
     'Address Mode',
-    'AVS / Building Tier',
+    'Address Verification',
     'Full Name',
     'Local Name',
     'Gender',
@@ -505,14 +509,16 @@ export function buildCSVContent(identities: GeneratedIdentity[]): string {
     'Card Number',
     'Card Expiry',
     'CVV',
-    'OpenStreetMap URL (Direct)',
+    'OpenStreetMap Source URL',
     'Google Maps URL'
   ];
 
   const rows = identities.map(id => [
     id.address.country,
-    id.address.derivationMeta?.modeLabelEn || id.address.addressMode || 'Scheme C: Condos',
-    id.address.derivationMeta?.avsTier || (id.address.addressMode === 'residential' ? 'Residential Single Family' : 'Residential Condominium / Apartment'),
+    id.address.source === 'OpenStreetMap' ? 'OSM-sourced building' : id.address.addressMode === 'derivation' ? 'Scheme A: Interpolated Number' : id.address.addressMode === 'residential' ? 'Scheme B: Residential Sample' : 'Scheme C: Apartment Sample',
+    id.address.source === 'OpenStreetMap'
+      ? 'Residential Building (AVS unverified) © OpenStreetMap contributors (ODbL)'
+      : id.address.addressMode === 'derivation' ? 'Interpolated Number (unverified)' : id.address.addressMode === 'residential' ? 'Residential Sample (delivery and AVS unverified)' : 'Apartment Sample (delivery and AVS unverified)',
     id.basic.fullName,
     id.basic.localFullName || '',
     id.basic.gender,
@@ -538,7 +544,7 @@ export function buildCSVContent(identities: GeneratedIdentity[]): string {
     `="${id.finance.cardNumber}"`, // escape for Excel
     `${id.finance.expMonth}/${id.finance.expYear}`,
     id.finance.cvv,
-    `https://www.openstreetmap.org/?mlat=${id.address.lat}&mlon=${id.address.lng}#map=16/${id.address.lat}/${id.address.lng}`,
+    id.address.sourceId ? `https://www.openstreetmap.org/${id.address.sourceId}` : '',
     `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(id.address.street + ', ' + id.address.city + ', ' + (id.address.stateFull || id.address.state) + ' ' + id.address.postcode)}`
   ]);
 
